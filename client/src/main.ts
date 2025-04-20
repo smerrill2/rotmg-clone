@@ -6,6 +6,7 @@ import { InputSystem } from './ecs/systems/InputSystem';
 import { MovementSystem } from './ecs/systems/MovementSystem';
 import { BulletSystem } from './ecs/systems/BulletSystem';
 import { CollisionSystem } from './ecs/systems/CollisionSystem';
+import { ParticleSystem } from './ecs/systems/ParticleSystem';
 // Import component *identifiers* (strings) and *data types*
 import { Transform, type TransformData } from './ecs/components/Transform';
 import { Velocity, type VelocityData } from './ecs/components/Velocity';
@@ -56,6 +57,10 @@ camera.mode = FreeCamera.ORTHOGRAPHIC_CAMERA;
 // camera.rotation.z = 0;
 camera.setTarget(playerInitialPos); // Target the player's starting point
 
+// --- Set the Active Camera *BEFORE* creating systems that need it ---
+scene.activeCamera = camera;
+// --- End Set Active Camera ---
+
 // Define the orthographic view frustum dimensions
 // Keep previous values for now, may need tuning for isometric view
 const zoomLevel = 1; // Adjust this value to zoom in/out
@@ -67,6 +72,9 @@ camera.orthoBottom = -10 * zoomLevel;
 
 // No camera controls needed for a fixed top-down view
 // camera.attachControl(canvas, true); // Removed
+
+// CURSOR: After scene creation, instantiate the system
+const particleSystem = new ParticleSystem(scene);
 
 // --- Create a light ---
 const light = new HemisphericLight("light", new Vector3(0, 1, 0), scene); // Light from above
@@ -120,14 +128,21 @@ const inputSystem = new InputSystem();
 const movementSystem = new MovementSystem(inputSystem, camera);
 const renderSpriteSystem = createRenderSpriteSystem(scene);
 const bulletSystem = new BulletSystem(scene);
-const collisionSystem = new CollisionSystem(bulletSystem);
+const collisionSystem = new CollisionSystem(bulletSystem, particleSystem);
+
+// --- Debugging: Expose toggle function to window ---
+// In the browser console, type: toggleCollisionDebug(true) or toggleCollisionDebug(false)
+(window as any).toggleCollisionDebug = (enable: boolean) => {
+  collisionSystem.toggleDebug(enable);
+};
+// ---
 
 // --- Firing Logic (Click-based) --- MODIFIED
 let canFire = true;
 const fireCooldown = 0.2; // seconds
 
 // Remove the spacebar listener
-// window.addEventListener("keydown", (e) => { ... });
+// window.addEventListener("keydown", (e) => { ... });as
 
 // Add a click listener (PointerDown event)
 scene.onPointerObservable.add((pointerInfo) => {
@@ -172,8 +187,9 @@ engine.runRenderLoop(() => {
   // Manually update systems in order
   movementSystem.update(dt);
   bulletSystem.update(dt);
-  renderSpriteSystem.update(dt);
-  collisionSystem.update(dt);
+  collisionSystem.update(dt); // Collision happens BEFORE particles update
+  particleSystem.update(dt); // Update particles AFTER collisions
+  renderSpriteSystem.update(dt); // Render happens last
 
   scene.render();
 });

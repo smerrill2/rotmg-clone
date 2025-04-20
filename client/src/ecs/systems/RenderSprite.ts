@@ -1,7 +1,8 @@
-import { Scene, SpriteManager, Sprite, Texture, Vector3 } from "@babylonjs/core";
+import { Scene, SpriteManager, Sprite, Texture, Vector3, AbstractMesh } from "@babylonjs/core";
 import { world, Entity } from "../world"; // Use Entity from world
 import { Transform, type TransformData } from "../components/Transform";
 import { SpriteRef, type SpriteRefData } from "../components/SpriteRef";
+import { Velocity, type VelocityData } from "../components/Velocity"; // Import Velocity
 
 // Define a more specific entity type for this system
 // Needs spriteInstance added to the component data type ideally,
@@ -14,7 +15,8 @@ interface SpriteRefDataWithInstance extends SpriteRefData {
 type RenderableEntity = Entity & {
   // Use component constants as keys
   [Transform]: TransformData;
-  [SpriteRef]: SpriteRefDataWithInstance; // Use extended type
+  [SpriteRef]: SpriteRefData; // Use standard type
+  [Velocity]?: VelocityData; // Add optional Velocity
 };
 
 // Cache for SpriteManagers, one per sheet URL
@@ -45,6 +47,9 @@ function getSpriteManager(scene: Scene, url: string, cellSize: { width: number, 
       // --- Explicit Alpha Blending --- 
       manager.texture.hasAlpha = true; // Ensure alpha is recognized
       manager.isPickable = false; // Sprites usually don't need picking
+      
+      // Ensure billboarding is enabled for all sprites in this manager
+      manager.fogEnabled = false; // Disable fog for better visibility
       // --- End Alpha Blending ---
 
       spriteManagers.set(cacheKey, manager); // Use cacheKey
@@ -122,7 +127,7 @@ export function createRenderSpriteSystem(scene: Scene) {
     }
   });
 
-  // Define the query for the update loop using world.with()
+  // Define the query for the update loop - INCLUDE Velocity
   const query = world.with(Transform, SpriteRef);
 
   return {
@@ -133,7 +138,8 @@ export function createRenderSpriteSystem(scene: Scene) {
         const entityRenderable = entity as RenderableEntity;
         const transformData = entityRenderable[Transform];
         const spriteRefData = entityRenderable[SpriteRef];
-        let sprite = spriteRefData.spriteInstance; // Get instance from component data
+        const velocityData = entityRenderable[Velocity]; // Get velocity data
+        let sprite = spriteRefData.spriteInstance; 
 
         // Determine desired render size or default to 1x1
         const renderWidth = spriteRefData.renderSize?.width ?? 1.0;
@@ -175,6 +181,19 @@ export function createRenderSpriteSystem(scene: Scene) {
           // Update size 
           sprite.width = renderWidth;
           sprite.height = renderHeight; 
+
+          // Only update angle for bullets with velocity (they should still rotate while billboarding)
+          if (velocityData && entity.id?.toString().startsWith("bullet_")) {
+              const vel = velocityData.vel;
+              // Check if moving significantly in XZ plane
+              if (Math.abs(vel.x) > 0.01 || Math.abs(vel.z) > 0.01) { 
+                  // Calculate angle from velocity vector (atan2 gives angle from +X axis)
+                  let angle = Math.atan2(vel.z, vel.x);
+                  // Adjust angle because sprite image points up (+Z) by default
+                  angle -= Math.PI / 2; 
+                  sprite.angle = angle;
+              }
+          }
 
           // --- Final Bullet Render State Log ---
           if (entity.id?.toString().startsWith("bullet_")) {

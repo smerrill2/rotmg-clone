@@ -81,8 +81,11 @@ export class BulletSystem {
     const velocity = direction.scale(BULLET_SPEED);
     // Add a small offset in the direction of fire to avoid immediate self-collision
     const spawnPosition = position.add(direction.scale(0.5)); 
-    spawnPosition.y = 4.0; // TEMP: Force higher Y position
+    spawnPosition.y = 1.0; // TEMP: Force higher Y position
 
+    // IMPORTANT: Use a larger bullet collision box for easier hit detection
+    const bulletSize = 0.8; // Increase from 0.5 to improve collision chances
+    
     // Activate bullet by adding components individually
     world.addComponent(bulletEntity, Bullet, { 
         damage: BULLET_DAMAGE, 
@@ -96,13 +99,12 @@ export class BulletSystem {
     world.addComponent(bulletEntity, Collidable, {
       // Create BoundingInfo using manual BoundingBox min/max
       boundingInfo: new BoundingInfo(
-        spawnPosition.subtract(new Vector3(0.5, 0.5, 0.5)),
-        spawnPosition.add(new Vector3(0.5, 0.5, 0.5))
+        spawnPosition.subtract(new Vector3(bulletSize, bulletSize, bulletSize)),
+        spawnPosition.add(new Vector3(bulletSize, bulletSize, bulletSize))
       )
     });
     
     // Update the SpriteRef component using addComponent to merge
-    // NOTE: This update might not be reflected immediately in the same frame for other systems.
     world.addComponent(bulletEntity, SpriteRef, { 
         ...bulletEntity[SpriteRef], 
         sheetUrl: BULLET_SPRITE_SHEET, 
@@ -111,18 +113,18 @@ export class BulletSystem {
         cellSize: { width: BULLET_SPRITE_SIZE, height: BULLET_SPRITE_SIZE },
         renderSize: { width: 0.5, height: 0.5 } // Set bullet render size
     });
-    console.log(`[BulletSystem] fireBullet setting isVisible=true for ${bulletEntity.id}`);
+    
+    // Minimal firing log
+    console.log(`[BulletSystem] Fired: ${bulletEntity.id} dir=(${direction.x.toFixed(1)},${direction.z.toFixed(1)})`);
 
     // HACK: Directly mutate isVisible for immediate effect due to timing issues
     const spriteRefData = bulletEntity[SpriteRef];
     if (spriteRefData) { 
-      // Ensure renderSize is set if not present during update (belt-and-suspenders)
+      // Ensure renderSize is set if not present during update
       if (!spriteRefData.renderSize) {
           spriteRefData.renderSize = { width: 0.5, height: 0.5 };
       }
       spriteRefData.isVisible = true; // Directly mutate for immediate effect
-    } else {
-        console.warn(`[BulletSystem] fireBullet: SpriteRef component not found immediately after addComponent for ${bulletEntity.id}?`);
     }
   }
 
@@ -131,33 +133,37 @@ export class BulletSystem {
    * @param entity The bullet entity to return.
    */
   returnBullet(entity: Entity) {
-    // Remove active components
-    world.removeComponent(entity, "bullet");
-    world.removeComponent(entity, "transform");
-    world.removeComponent(entity, "velocity");
-    world.removeComponent(entity, "collidable");
+    // Get sprite instance BEFORE removing components
+    const spriteRefData = entity[SpriteRef];
+    const spriteInstance = spriteRefData?.spriteInstance;
 
-    // Update SpriteRef visibility - Check existence via optional chaining
-    const spriteRefDataToHide = entity[SpriteRef]; 
-    if (spriteRefDataToHide) { // Check if component exists
-      // Re-add component to update
-      world.addComponent(entity, SpriteRef, { 
-          ...spriteRefDataToHide, // Spread existing data first
-          sheetUrl: spriteRefDataToHide.sheetUrl, // Explicitly keep sheetUrl
-          cellIndex: spriteRefDataToHide.cellIndex, // Explicitly keep cellIndex
-          isVisible: false,
-          cellSize: { width: BULLET_SPRITE_SIZE, height: BULLET_SPRITE_SIZE },
-          renderSize: { width: 0.5, height: 0.5 } // Set bullet render size
-      });
-      console.log(`[BulletSystem] returnBullet setting isVisible=false for ${entity.id}`);
+    // Remove active components
+    world.removeComponent(entity, Bullet);
+    world.removeComponent(entity, Transform);
+    world.removeComponent(entity, Velocity);
+    world.removeComponent(entity, Collidable);
+
+    // Directly hide the sprite instance if it exists
+    if (spriteInstance) {
+        console.log(`[BulletSystem] returnBullet: Hiding sprite instance for ${entity.id}`);
+        spriteInstance.isVisible = false;
+    } else {
+        console.warn(`[BulletSystem] returnBullet: No sprite instance found for ${entity.id} to hide.`);
     }
 
     // Add back to pool
     this.pool.push(entity);
+    console.log(`[BulletSystem] Returned bullet ${entity.id} to pool`);
   }
 
   update(dt: number) {
-    for (const entity of world.with(Bullet, Transform, Velocity)) {
+    // Only log active bullet count if there are any
+    const activeBullets = Array.from(world.with(Bullet, Transform, Velocity));
+    if (activeBullets.length > 0) {
+      console.log(`[BulletSystem] Active bullets: ${activeBullets.length}`);
+    }
+
+    for (const entity of activeBullets) {
       // Check if bullet component data exists
       const bulletData = entity[Bullet];
       if (!bulletData) continue; 
@@ -165,24 +171,22 @@ export class BulletSystem {
       // Update lifespan
       bulletData.lifespan -= dt;
 
-      // Update BoundingInfo position
+      // Update BoundingInfo position - with minimal logging
       const transformData = entity[Transform];
       const collidableData = entity[Collidable];
       if (collidableData && transformData) {
-        const halfSize = 0.5; // Half the size used in fireBullet
-        const min = transformData.pos.subtract(new Vector3(halfSize, halfSize, halfSize));
-        const max = transformData.pos.add(new Vector3(halfSize, halfSize, halfSize));
+        // IMPORTANT: Use same bulletSize as in fireBullet
+        const bulletSize = 0.8; // Increase from 0.5 to improve collision chances
+        const min = transformData.pos.subtract(new Vector3(bulletSize, bulletSize, bulletSize));
+        const max = transformData.pos.add(new Vector3(bulletSize, bulletSize, bulletSize));
+        
         // Use BoundingInfo's reConstruct method
         collidableData.boundingInfo.reConstruct(min, max);
       }
 
-      // --- Log lifespan before check ---
-      console.log(`[BulletSystem] Update check: ${entity.id} lifespan=${bulletData.lifespan.toFixed(2)}`);
-      // --- End log ---
-
       // Return bullet to pool if lifespan expired
       if (bulletData.lifespan <= 0) {
-        console.log(`[BulletSystem] Lifespan expired for ${entity.id}, returning to pool.`); // Log return reason
+        console.log(`[BulletSystem] Lifespan expired for ${entity.id}`);
         this.returnBullet(entity);
       }
     }
